@@ -50,6 +50,7 @@ class APP(object):
             use_constraints=False,
             armature=armature,
             effector_frame_name=effector_frame_name,
+            use_callbacks=True,
         )
         mpc = MPC(ocp, whole_x_plan, whole_a_plan, rmodel, cmodel)
         mpc.ocp.set_weights(10**4, 1, 10**-3, 0)

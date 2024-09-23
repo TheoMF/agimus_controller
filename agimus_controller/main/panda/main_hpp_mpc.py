@@ -47,25 +47,26 @@ class APP(object):
             use_constraints=True,
             armature=armature,
             effector_frame_name=effector_frame_name,
+            use_callbacks=True,
         )
 
-        mpc = MPC(ocp, x_plan, a_plan, rmodel, cmodel)
+        self.mpc = MPC(ocp, x_plan, a_plan, rmodel, cmodel)
 
         start = time.time()
-        mpc.ocp.set_weights(10**4, 1, 10**-3, 0)
-        mpc.simulate_mpc(T=100, save_predictions=False)
+        self.mpc.ocp.set_weights(10**4, 1, 10**-3, 0)
+        self.mpc.simulate_mpc(T=100, save_predictions=False)
         end = time.time()
         print("Time of solving: ", end - start)
-        u_plan = mpc.ocp.get_u_plan(x_plan, a_plan)
+        u_plan = self.mpc.ocp.get_u_plan(x_plan, a_plan)
         self.mpc_plots = MPCPlots(
-            croco_xs=mpc.croco_xs,
-            croco_us=mpc.croco_us,
+            croco_xs=self.mpc.croco_xs,
+            croco_us=self.mpc.croco_us,
             whole_x_plan=x_plan,
             whole_u_plan=u_plan,
             rmodel=rmodel,
             vmodel=pandawrapper.get_reduced_visual_model(),
             cmodel=cmodel,
-            DT=mpc.ocp.DT,
+            DT=self.mpc.ocp.DT,
             ee_frame_name=ee_frame_name,
             viewer=viewer,
         )
@@ -80,5 +81,6 @@ def main():
 
 
 if __name__ == "__main__":
+
     app = APP()
     app.main(use_gui=True, spawn_servers=True)

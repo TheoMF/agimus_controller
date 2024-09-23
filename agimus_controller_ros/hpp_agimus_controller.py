@@ -9,7 +9,8 @@ class HppAgimusController(ControllerBase):
     def __init__(self) -> None:
         super().__init__()
 
-        self.q_goal = [-0.8311, 0.6782, 0.3201, -1.1128, 1.2190, 1.9823, 0.7248]
+        # self.q_goal = [-0.8311, 0.6782, 0.3201, -1.1128, 1.2190, 1.9823, 0.7248]
+        self.q_goal = [0.001, 0.000, 0.000, -1.574, -0.003, 1.557, 0.784]
         self.hpp_interface = HppInterface()
         self.plan_is_set = False
         self.traj_idx = 0

@@ -6,7 +6,7 @@ import time
 import pinocchio as pin
 from enum import Enum
 from threading import Lock
-from std_msgs.msg import Duration, Header
+from std_msgs.msg import Duration, Header, Int8
 from vision_msgs.msg import Detection2DArray
 import tf2_ros
 import tf2_geometry_msgs
@@ -39,7 +39,16 @@ class HPPStateMachine(Enum):
 
 
 class AgimusControllerNodeParameters:
-    def __init__(self) -> None:
+    def __init__(self, use_ros_params=True, params_dict=None) -> None:
+        if use_ros_params:
+            self.set_parameters_from_ros()
+        elif params_dict is not None:
+            self.set_parameters_from_dict(params_dict)
+        else:
+            raise RuntimeError("no parameters given for the controller")
+        self.use_ros_params = use_ros_params
+
+    def set_parameters_from_ros(self):
         self.save_predictions_and_refs = rospy.get_param(
             "save_predictions_and_refs", False
         )
@@ -52,33 +61,59 @@ class AgimusControllerNodeParameters:
         self.gripper_weight = rospy.get_param("gripper_weight", 10000)
         self.state_weight = rospy.get_param("state_weight", 10)
         self.control_weight = rospy.get_param("control_weight", 0.001)
+        self.max_iter = rospy.get_param("max_iter", 1)
+        self.max_qp_iter = rospy.get_param("max_qp_iter", 100)
         self.use_constraints = rospy.get_param("use_constraints", False)
         self.use_vision = rospy.get_param("use_vision", False)
+        self.use_vision_simulated = rospy.get_param("use_vision_simulated", False)
         self.effector_frame_name = rospy.get_param(
             "effector_frame_name", "panda_hand_tcp"
         )
+        self.activate_callback = rospy.get_param("activate_callback", False)
+
+    def set_parameters_from_dict(self, params_dict):
+        self.save_predictions_and_refs = params_dict["save_predictions_and_refs"]
+        self.dt = params_dict["dt"]
+        self.rate = params_dict["rate"]
+        self.horizon_size = params_dict["horizon_size"]
+        self.armature = np.array(params_dict["armature"])
+        self.gripper_weight = params_dict["gripper_weight"]
+        self.state_weight = params_dict["state_weight"]
+        self.control_weight = params_dict["control_weight"]
+        self.max_iter = params_dict["max_iter"]
+        self.max_qp_iter = params_dict["max_qp_iter"]
+        self.use_constraints = params_dict["use_constraints"]
+        self.use_vision = params_dict["use_vision"]
+        self.use_vision_simulated = params_dict["use_vision_simulated"]
+        self.effector_frame_name = params_dict["effector_frame_name"]
+        self.activate_callback = params_dict["activate_callback"]
+
+    def get_dict(self):
+        params = {}
+        params["save_predictions_and_refs"] = self.save_predictions_and_refs
+        params["dt"] = self.dt
+        params["rate"] = self.rate
+        params["horizon_size"] = self.horizon_size
+        params["armature"] = self.armature
+        params["gripper_weight"] = self.gripper_weight
+        params["state_weight"] = self.state_weight
+        params["control_weight"] = self.control_weight
+        params["max_iter"] = self.max_iter
+        params["max_qp_iter"] = self.max_qp_iter
+        params["use_constraints"] = self.use_constraints
+        params["use_vision"] = self.use_vision
+        params["use_vision_simulated"] = self.use_vision_simulated
+        params["effector_frame_name"] = self.effector_frame_name
+        params["activate_callback"] = self.activate_callback
+        return params
 
 
 class ControllerBase:
-    def __init__(self) -> None:
-        self.params = AgimusControllerNodeParameters()
+    def __init__(self, params: AgimusControllerNodeParameters) -> None:
+        self.params = params
         self.traj_buffer = TrajectoryBuffer()
         self.point_attributes = [PointAttribute.Q, PointAttribute.V, PointAttribute.A]
-        self.elapsed_time = None
-        self.last_elapsed_time = None
-        self.state_machine_timeline = [
-            HPPStateMachine.WAITING_PICK_TRAJECTORY,
-            HPPStateMachine.RECEIVING_PICK_TRAJECTORY,
-            HPPStateMachine.WAITING_PLACE_TRAJECTORY,
-            HPPStateMachine.RECEIVING_PLACE_TRAJECTORY,
-            HPPStateMachine.WAITING_GOING_INIT_POSE_TRAJECTORY,
-            HPPStateMachine.RECEIVING_GOING_INIT_POSE_TRAJECTORY,
-        ]
-        self.state_machine_timeline_idx = 0
-        self.state_machine = self.state_machine_timeline[
-            self.state_machine_timeline_idx
-        ]
-
+        self.initialize_state_machine_attributes()
         robot_params = PandaRobotModelParameters()
         robot_params.collision_as_capsule = True
         robot_params.self_collision = False
@@ -104,6 +139,7 @@ class ControllerBase:
             use_constraints=self.params.use_constraints,
             armature=self.params.armature,
             effector_frame_name=self.params.effector_frame_name,
+            use_callbacks=self.params.activate_callback,
         )
         self.ocp.set_weights(
             self.params.gripper_weight,
@@ -113,32 +149,35 @@ class ControllerBase:
         )
         self.mpc_data = {}
 
-        self.rate = rospy.Rate(self.params.rate, reset=True)
-        self.mutex = Lock()
-        self.sensor_msg = Sensor()
-        self.control_msg = Control()
-        self.ocp_solve_time = Duration()
-        self.x0 = np.zeros(self.nq + self.nv)
-        self.x_guess = np.zeros(self.nq + self.nv)
-        self.u_guess = np.zeros(self.nv)
-        self.state_subscriber = rospy.Subscriber(
-            "robot_sensors", Sensor, self.sensor_callback
-        )
-
-        self.control_publisher = rospy.Publisher(
-            "motion_server_control", Control, queue_size=1, tcp_nodelay=True
-        )
-        self.ocp_solve_time_pub = rospy.Publisher(
-            "ocp_solve_time", Duration, queue_size=1, tcp_nodelay=True
-        )
+        if self.params.use_ros_params:
+            self.rate = rospy.Rate(self.params.rate, reset=True)
+            self.mutex = Lock()
+            self.sensor_msg = Sensor()
+            self.control_msg = Control()
+            self.state_subscriber = rospy.Subscriber(
+                "robot_sensors", Sensor, self.sensor_callback
+            )
+            self.control_publisher = rospy.Publisher(
+                "motion_server_control", Control, queue_size=1, tcp_nodelay=True
+            )
+            self.ocp_solve_time_pub = rospy.Publisher(
+                "ocp_solve_time", Duration, queue_size=1, tcp_nodelay=True
+            )
+            self.ocp_x0_pub = rospy.Publisher(
+                "ocp_x0", Sensor, queue_size=1, tcp_nodelay=True
+            )
+            self.state_pub = rospy.Publisher(
+                "state", Int8, queue_size=1, tcp_nodelay=True
+            )
 
         self.init_in_world_M_object = None
         self.in_world_M_object = None
         self.target_translation_object_to_effector = None
-        self.start_time = 0.0
         self.first_robot_sensor_msg_received = False
         self.first_pose_ref_msg_received = True
         self.last_point = None
+        self.pick_traj_last_pose = None
+        self.visual_servoing = False
         if self.params.use_vision:
             self.tf_buffer = tf2_ros.Buffer()
             self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
@@ -147,6 +186,35 @@ class ControllerBase:
             self.vision_subscriber = rospy.Subscriber(
                 "/happypose/detections", Detection2DArray, self.vision_callback
             )
+        if self.params.use_vision_simulated:
+            self.simulate_happypose_callback()
+        if self.params.use_vision and self.params.use_vision_simulated:
+            raise RuntimeError("use_vision and use_vision_simulated can't both be true")
+
+    def initialize_state_machine_attributes(self):
+        self.elapsed_time = None
+        self.last_elapsed_time = None
+        self.state_machine_timeline = [
+            HPPStateMachine.WAITING_PICK_TRAJECTORY,
+            HPPStateMachine.RECEIVING_PICK_TRAJECTORY,
+            HPPStateMachine.WAITING_PLACE_TRAJECTORY,
+            HPPStateMachine.RECEIVING_PLACE_TRAJECTORY,
+            HPPStateMachine.WAITING_GOING_INIT_POSE_TRAJECTORY,
+            HPPStateMachine.RECEIVING_GOING_INIT_POSE_TRAJECTORY,
+        ]
+        self.state_machine_timeline_idx = 0
+        self.state_machine = self.state_machine_timeline[
+            self.state_machine_timeline_idx
+        ]
+
+    def simulate_happypose_callback(self):
+        self.init_in_world_M_object = pin.XYZQUATToSE3(
+            np.array([0.0, 0.0, 0.85, 0.0, 0.0, 0.0, 1.0])
+        )
+
+        self.in_world_M_object = pin.XYZQUATToSE3(
+            np.array([-0.03, -0.03, 0.85, 0.0, 0.0, 0.0, 1.0])
+        )
 
     def get_transform_between_frames(self, parent_frame, child_frame, timestamp):
         return self.tf_buffer.lookup_transform(
@@ -154,10 +222,10 @@ class ControllerBase:
         )
 
     def sensor_callback(self, sensor_msg):
-        with self.mutex:
-            self.sensor_msg = deepcopy(sensor_msg)
-            if not self.first_robot_sensor_msg_received:
-                self.first_robot_sensor_msg_received = True
+        # with self.mutex:
+        self.sensor_msg = deepcopy(sensor_msg)
+        if not self.first_robot_sensor_msg_received:
+            self.first_robot_sensor_msg_received = True
 
     def vision_callback(self, vision_msg: Detection2DArray):
         if vision_msg.detections == []:
@@ -188,9 +256,6 @@ class ControllerBase:
             )
             if wait_for_input:
                 rospy.loginfo_throttle(3, "Waiting until we receive a sensor message.")
-                with self.mutex:
-                    sensor_msg = deepcopy(self.sensor_msg)
-                    self.start_time = sensor_msg.header.stamp.to_sec()
             rospy.loginfo_once("Start controller")
             self.rate.sleep()
         return wait_for_input
@@ -212,9 +277,12 @@ class ControllerBase:
         point = self.get_next_trajectory_point()
         if point is not None:
             self.traj_buffer.add_trajectory_point(point)
+        while point is not None:
+            point = self.get_next_trajectory_point()
+            if point is not None:
+                self.traj_buffer.add_trajectory_point(point)
 
-    def first_solve(self):
-        sensor_msg = self.get_sensor_msg()
+    def first_solve(self, x0):
         # retrieve horizon state and acc references
         horizon_points = self.traj_buffer.get_points(
             self.params.horizon_size, self.point_attributes
@@ -227,30 +295,20 @@ class ControllerBase:
 
         # First solve
         self.mpc = MPC(self.ocp, x_plan, a_plan, self.rmodel, self.cmodel)
-        x0 = np.concatenate(
-            [sensor_msg.joint_state.position, sensor_msg.joint_state.velocity]
-        )
         self.mpc.mpc_first_step(x_plan, a_plan, x0, self.params.horizon_size)
         self.next_node_idx = self.params.horizon_size
         if self.params.save_predictions_and_refs:
             self.create_mpc_data()
-        self.mpc_data["hpp_trajectory"].append(list(x_plan))
         _, u, k = self.mpc.get_mpc_output()
-        return sensor_msg, u, k
+        return u, k
 
-    def solve(self):
-        sensor_msg = self.get_sensor_msg()
-        x0 = np.concatenate(
-            [sensor_msg.joint_state.position, sensor_msg.joint_state.velocity]
-        )
+    def solve(self, x0):
         self.target_translation_object_to_effector = None
         self.fill_buffer()
         if self.traj_buffer.get_size(self.point_attributes) > 0:
             point = self.traj_buffer.get_points(1, self.point_attributes)[0]
             self.last_point = point
             new_x_ref = point.get_x_as_q_v()
-            self.mpc_data["hpp_trajectory"].append(new_x_ref)
-
         else:
             point = self.last_point
             new_x_ref = point.get_x_as_q_v()
@@ -262,18 +320,30 @@ class ControllerBase:
             new_x_ref[: self.rmodel.nq],
         )
         # if last point of the pick trajectory is in horizon and we wanna use vision pose
-        if self.last_pick_traj_point_is_in_horizon() and self.params.use_vision:
+        if self.pick_traj_last_point_is_near(x0) and (
+            self.params.use_vision or self.params.use_vision_simulated
+        ):
             self.update_effector_placement_with_vision()
-        self.mpc.mpc_step(x0, new_x_ref, new_a_ref, self.in_world_M_effector)
-
+            self.mpc.ocp.set_last_running_model_placement_cost(
+                self.in_world_M_effector, self.params.gripper_weight / self.params.dt
+            )
+        else:
+            self.mpc.ocp.set_last_running_model_placement_weight(0)
+        self.mpc.mpc_step(
+            x0,
+            new_x_ref,
+            new_a_ref,
+            self.in_world_M_effector,
+            self.params.max_iter,
+            self.params.max_qp_iter,
+        )
         if self.next_node_idx < self.mpc.whole_x_plan.shape[0] - 1:
             self.next_node_idx += 1
 
         if self.params.save_predictions_and_refs:
             self.fill_predictions_and_refs_arrays()
         _, u, k = self.mpc.get_mpc_output()
-
-        return sensor_msg, u, k
+        return u, k
 
     def update_effector_placement_with_vision(self):
         in_object_rot_effector = (
@@ -291,15 +361,49 @@ class ControllerBase:
             self.in_world_M_object.rotation * in_object_rot_effector
         )
 
-    def last_pick_traj_point_is_in_horizon(self):
+    def pick_traj_last_point_is_in_horizon(self):
         return (
             self.state_machine == HPPStateMachine.WAITING_PLACE_TRAJECTORY
             and self.traj_buffer.get_size(self.point_attributes) == 0
         )
 
+    def pick_traj_last_point_is_near(self, x0):
+        if (
+            self.state_machine == HPPStateMachine.WAITING_PLACE_TRAJECTORY
+            and self.pick_traj_last_pose is None
+        ):
+            last_pick_traj_point = self.traj_buffer._buffer[-1]
+            x = last_pick_traj_point.get_x_as_q_v()
+            self.pick_traj_last_pose = get_ee_pose_from_configuration(
+                self.rmodel,
+                self.rdata,
+                self.effector_frame_id,
+                x[: self.rmodel.nq],
+            ).translation
+        current_pose = get_ee_pose_from_configuration(
+            self.rmodel,
+            self.rdata,
+            self.effector_frame_id,
+            x0[: self.rmodel.nq],
+        ).translation
+
+        if self.pick_traj_last_pose is None:
+            return False
+        else:
+            if self.state_machine == HPPStateMachine.WAITING_PLACE_TRAJECTORY:
+                if not self.visual_servoing:
+                    self.visual_servoing = (
+                        self.state_machine == HPPStateMachine.WAITING_PLACE_TRAJECTORY
+                        and np.linalg.norm(self.pick_traj_last_pose - current_pose)
+                        < 0.02
+                    )
+            else:
+                self.visual_servoing = False
+            return self.visual_servoing
+
     def get_sensor_msg(self):
-        with self.mutex:
-            sensor_msg = deepcopy(self.sensor_msg)
+        # with self.mutex:
+        sensor_msg = deepcopy(self.sensor_msg)
         return sensor_msg
 
     def send(self, sensor_msg, u, k):
@@ -320,10 +424,10 @@ class ControllerBase:
         self.mpc_data["translation_refs"] = [p_ref]
         self.mpc_data["control_refs"] = [u_ref]
         self.mpc_data["state"] = [self.state_machine.value]
+        self.mpc_data["x0"] = [xs[0, :]]
         if self.params.use_constraints:
             collision_residuals = self.mpc.get_collision_residuals()
             self.mpc_data["coll_residuals"] = collision_residuals
-        self.mpc_data["hpp_trajectory"] = []
         if self.in_world_M_object is not None:
             self.mpc_data["vision_refs"] = [
                 np.array(self.in_world_M_object.translation)
@@ -335,6 +439,7 @@ class ControllerBase:
         x_ref, p_ref, u_ref = self.mpc.get_reference()
 
         self.mpc_data["preds_xs"].append(xs)
+
         self.mpc_data["preds_us"].append(us)
         self.mpc_data["state_refs"].append(x_ref)
         self.mpc_data["translation_refs"].append(p_ref)
@@ -345,9 +450,9 @@ class ControllerBase:
         if self.params.use_constraints:
             collision_residuals = self.mpc.get_collision_residuals()
             for coll_residual_key in collision_residuals.keys():
-                self.mpc_data["coll_residuals"][coll_residual_key] += (
-                    collision_residuals[coll_residual_key]
-                )
+                self.mpc_data["coll_residuals"][
+                    coll_residual_key
+                ] += collision_residuals[coll_residual_key]
 
         if self.target_translation_object_to_effector is not None:
             self.mpc_data["obj_trans_ee"].append(
@@ -361,23 +466,41 @@ class ControllerBase:
 
     def exit_handler(self):
         print("saving data")
-        np.save("mpc_data.npy", self.mpc_data)
+        np.save("mpc_params.npy", self.params.get_dict())
+        if self.params.save_predictions_and_refs:
+            np.save("mpc_data.npy", self.mpc_data)
+
+    def get_x0_from_sensor_msg(self, sensor_msg):
+        return np.concatenate(
+            [sensor_msg.joint_state.position, sensor_msg.joint_state.velocity]
+        )
+
+    def publish_ocp_solve_time(self, ocp_solve_time):
+        self.ocp_solve_time_pub.publish(
+            convert_float_to_ros_duration_msg(ocp_solve_time)
+        )
 
     def run(self):
         self.wait_first_sensor_msg()
         self.wait_buffer_has_twice_horizon_points()
-        sensor_msg, u, k = self.first_solve()
-        input("Press enter to continue ...")
+        sensor_msg = self.get_sensor_msg()
+        start_compute_time = time.time()
+        u, k = self.first_solve(self.get_x0_from_sensor_msg(sensor_msg))
+        compute_time = time.time() - start_compute_time
         self.send(sensor_msg, u, k)
+        self.publish_ocp_solve_time(compute_time)
+        self.ocp_x0_pub.publish(sensor_msg)
+        self.state_pub.publish(Int8(self.state_machine.value))
         self.rate.sleep()
-        if self.params.save_predictions_and_refs:
-            atexit.register(self.exit_handler)
+        atexit.register(self.exit_handler)
         while not rospy.is_shutdown():
             start_compute_time = time.time()
             self.update_state_machine()
-            sensor_msg, u, k = self.solve()
+            sensor_msg = self.get_sensor_msg()
+            u, k = self.solve(self.get_x0_from_sensor_msg(sensor_msg))
             self.send(sensor_msg, u, k)
             compute_time = time.time() - start_compute_time
+            self.publish_ocp_solve_time(compute_time)
+            self.state_pub.publish(Int8(self.state_machine.value))
+            self.ocp_x0_pub.publish(sensor_msg)
             self.rate.sleep()
-            self.ocp_solve_time = convert_float_to_ros_duration_msg(compute_time)
-            self.ocp_solve_time_pub.publish(self.ocp_solve_time)
