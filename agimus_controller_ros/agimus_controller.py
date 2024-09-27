@@ -24,8 +24,8 @@ class AgimusControllerNode(ControllerBase):
             if self.elapsed_time is not None:
                 self.change_state()
             return
-        if (self.elapsed_time < 0.05 and self.last_elapsed_time >= 0.05) or (
-            self.elapsed_time >= 0.05 and self.last_elapsed_time < 0.05
+        if (self.elapsed_time < 0.1 and self.last_elapsed_time >= 0.1) or (
+            self.elapsed_time >= 0.1 and self.last_elapsed_time < 0.1
         ):
             self.change_state()
 

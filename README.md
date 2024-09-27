@@ -63,6 +63,7 @@ roslaunch agimus-hpp start_hpp.launch
 cd ~/ros_ws/src/agimus-demos/franka/manipulation/
 python -i script_hpp.py
 q_init, p = GrabAndDrop(robot, ps, binPicking, <your pose acquisition method>)
+q_init, p = GrabAndDrop(robot, ps, binPicking, q_init, ros_bridge_config,vision_listener)
 rostopic pub /hpp/target/read_path std_msgs/UInt32 0
 rostopic pub /hpp/target/publish std_msgs/Empty
 ```

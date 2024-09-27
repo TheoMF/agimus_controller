@@ -7,6 +7,7 @@ import pinocchio as pin
 from enum import Enum
 from threading import Lock
 from std_msgs.msg import Duration, Header, Int8
+from geometry_msgs.msg import Pose
 from vision_msgs.msg import Detection2DArray
 import tf2_ros
 import tf2_geometry_msgs
@@ -108,6 +109,28 @@ class AgimusControllerNodeParameters:
         return params
 
 
+def find_tracked_object(detections):
+    tless1_detections = []
+    for detection in detections:
+        if detection.results[0].hypothesis.class_id != "tless-obj_000001":
+            continue
+            # print("found object of type ", detection.results[0].hypothesis.class_id)
+        else:
+            tless1_detections.append(detection)
+    if len(tless1_detections) == 0:
+        return None
+    if len(tless1_detections) == 1:
+        return tless1_detections[0].results[0].pose
+    current_idx = int(tless1_detections[0].id[-1])
+    current_detection = tless1_detections[0]
+    for idx in range(1, len(tless1_detections)):
+        if int(tless1_detections[idx].id[-1]) < current_idx:
+            current_idx = tless1_detections[idx].id[-1]
+            current_detection = tless1_detections[idx]
+
+    return current_detection.results[0].pose
+
+
 class ControllerBase:
     def __init__(self, params: AgimusControllerNodeParameters) -> None:
         self.params = params
@@ -169,6 +192,9 @@ class ControllerBase:
             self.state_pub = rospy.Publisher(
                 "state", Int8, queue_size=1, tcp_nodelay=True
             )
+            self.happypose_pose_pub = rospy.Publisher(
+                "happypose_pose", Pose, queue_size=1, tcp_nodelay=True
+            )
 
         self.init_in_world_M_object = None
         self.in_world_M_object = None
@@ -184,7 +210,7 @@ class ControllerBase:
             # to avoid errors when looking at transforms too early in time
             time.sleep(0.5)
             self.vision_subscriber = rospy.Subscriber(
-                "/happypose/detections", Detection2DArray, self.vision_callback
+                "/labeled/detections", Detection2DArray, self.vision_callback
             )
         if self.params.use_vision_simulated:
             self.simulate_happypose_callback()
@@ -216,11 +242,6 @@ class ControllerBase:
             np.array([-0.03, -0.03, 0.85, 0.0, 0.0, 0.0, 1.0])
         )
 
-    def get_transform_between_frames(self, parent_frame, child_frame, timestamp):
-        return self.tf_buffer.lookup_transform(
-            target_frame=parent_frame, source_frame=child_frame, time=timestamp
-        )
-
     def sensor_callback(self, sensor_msg):
         # with self.mutex:
         self.sensor_msg = deepcopy(sensor_msg)
@@ -230,10 +251,12 @@ class ControllerBase:
     def vision_callback(self, vision_msg: Detection2DArray):
         if vision_msg.detections == []:
             return
-        in_camera_pose_object = vision_msg.detections[0].results[0].pose
+        in_camera_pose_object = find_tracked_object(vision_msg.detections)
         image_timestamp = vision_msg.detections[0].header.stamp
-        in_world_M_camera = self.get_transform_between_frames(
-            "world", "camera_color_optical_frame", image_timestamp
+        in_world_M_camera = self.tf_buffer.lookup_transform(
+            target_frame="world",
+            source_frame="camera_color_optical_frame",
+            time=image_timestamp,
         )
         in_world_pose_object = tf2_geometry_msgs.do_transform_pose(
             in_camera_pose_object, in_world_M_camera
@@ -453,11 +476,11 @@ class ControllerBase:
                 self.mpc_data["coll_residuals"][
                     coll_residual_key
                 ] += collision_residuals[coll_residual_key]
-
+        """
         if self.target_translation_object_to_effector is not None:
             self.mpc_data["obj_trans_ee"].append(
                 self.target_translation_object_to_effector
-            )
+            )"""
 
         if "vision_refs" in self.mpc_data.keys():
             self.mpc_data["vision_refs"].append(
@@ -480,6 +503,19 @@ class ControllerBase:
             convert_float_to_ros_duration_msg(ocp_solve_time)
         )
 
+    def publish_vision_pose(self):
+        if self.in_world_M_object is not None:
+            in_world_pose_object = pin.SE3ToXYZQUAT(self.in_world_M_object)
+            in_world_pose_object_ros = Pose()
+            in_world_pose_object_ros.position.x = in_world_pose_object[0]
+            in_world_pose_object_ros.position.y = in_world_pose_object[1]
+            in_world_pose_object_ros.position.z = in_world_pose_object[2]
+            in_world_pose_object_ros.orientation.x = in_world_pose_object[3]
+            in_world_pose_object_ros.orientation.y = in_world_pose_object[4]
+            in_world_pose_object_ros.orientation.z = in_world_pose_object[5]
+            in_world_pose_object_ros.orientation.w = in_world_pose_object[6]
+            self.happypose_pose_pub.publish(in_world_pose_object_ros)
+
     def run(self):
         self.wait_first_sensor_msg()
         self.wait_buffer_has_twice_horizon_points()
@@ -491,6 +527,7 @@ class ControllerBase:
         self.publish_ocp_solve_time(compute_time)
         self.ocp_x0_pub.publish(sensor_msg)
         self.state_pub.publish(Int8(self.state_machine.value))
+        self.publish_vision_pose()
         self.rate.sleep()
         atexit.register(self.exit_handler)
         while not rospy.is_shutdown():
@@ -503,4 +540,5 @@ class ControllerBase:
             self.publish_ocp_solve_time(compute_time)
             self.state_pub.publish(Int8(self.state_machine.value))
             self.ocp_x0_pub.publish(sensor_msg)
+            self.publish_vision_pose()
             self.rate.sleep()

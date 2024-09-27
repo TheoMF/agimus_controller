@@ -1,15 +1,15 @@
-save_predictions_and_refs: False
+save_predictions_and_refs: True
 dt: 0.01
 rate: 100
-horizon_size: 25
+horizon_size: 15
 armature: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
-gripper_weight: 1000
+gripper_weight: 60
 state_weight: 5
 control_weight: 0.001
-max_qp_iter: 80
-max_iter: 7
-use_vision: False
-use_vision_simulated: True
+max_qp_iter: 125
+max_iter: 10
+use_vision: True
+use_vision_simulated: False
 effector_frame_name: "panda_hand_tcp"
 use_constraints: True
 activate_callback: False
