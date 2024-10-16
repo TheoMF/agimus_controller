@@ -90,7 +90,7 @@ class MPC:
                 self.ocp._effector_frame_id,
                 x_plan[-1, : self.nq],
             )
-            x, u = self.mpc_step(x, x_plan[-1], a_plan[-1], placement_ref, 7, 100)
+            x, u = self.mpc_step(x, x_plan[-1], a_plan[-1], placement_ref, 500, 2000)
             if next_node_idx < self.whole_x_plan.shape[0] - 1:
                 next_node_idx += 1
             mpc_xs[idx + 1, :] = x
@@ -167,6 +167,6 @@ class MPC:
         if use_constraints:
             collision_residuals = self.get_collision_residuals()
             for coll_residual_key in collision_residuals.keys():
-                self.mpc_data["coll_residuals"][coll_residual_key] += (
-                    collision_residuals[coll_residual_key]
-                )
+                self.mpc_data["coll_residuals"][
+                    coll_residual_key
+                ] += collision_residuals[coll_residual_key]

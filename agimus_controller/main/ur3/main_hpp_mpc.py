@@ -23,7 +23,6 @@ class APP(object):
         x_plan, a_plan, _ = hpp_interface.get_hpp_x_a_planning(1e-2)
         viewer = hpp_interface.get_viewer()
         armature = np.zeros(rmodel.nq)
-        print("rmodel = ", rmodel)
         ocp = OCPCrocoHPP(
             rmodel=rmodel, cmodel=None, use_constraints=False, armature=armature
         )

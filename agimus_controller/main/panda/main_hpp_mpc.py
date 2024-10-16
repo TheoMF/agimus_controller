@@ -47,6 +47,7 @@ class APP(object):
             use_constraints=True,
             armature=armature,
             effector_frame_name=effector_frame_name,
+            use_callbacks=True,
         )
 
         mpc = MPC(ocp, x_plan, a_plan, rmodel, cmodel)
@@ -80,5 +81,6 @@ def main():
 
 
 if __name__ == "__main__":
+
     app = APP()
     app.main(use_gui=True, spawn_servers=True)

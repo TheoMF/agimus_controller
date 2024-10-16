@@ -41,7 +41,6 @@ class OCPParameters:
             self.set_parameters_from_dict(params_dict)
         else:
             raise RuntimeError("no parameters given for the controller")
-        print("ocp values ", self.get_dict())
 
     def set_parameters_from_ros(self):
         self.dt = rospy.get_param("ocp/dt", 0.01)

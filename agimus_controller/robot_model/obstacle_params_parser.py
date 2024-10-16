@@ -73,6 +73,7 @@ class ObstacleParamsParser:
             elif obstacle_type == "capsule":
                 radius = obstacle_config.get("radius")
                 half_length = obstacle_config.get("halfLength")
+                print("here rad ", radius, " length ", half_length)
                 if radius and half_length:
                     geometry = Capsule(radius, half_length)
                 else:
