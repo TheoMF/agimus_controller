@@ -154,6 +154,7 @@ class MPCPlots:
             environnement_pose = [-0.2, 0, 0.02, 0, 0, 0, 1]  # pose of the ball
         for x in self.croco_xs:
             self.viewer(list(x)[: self.nq] + environnement_pose)
+            self.vis[0].display(x[: self.nq])
             time.sleep(self.DT)
 
     def display_path_meshcat(self):
