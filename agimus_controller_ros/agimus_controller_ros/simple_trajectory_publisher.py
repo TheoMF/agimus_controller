@@ -12,12 +12,8 @@ from linear_feedback_controller_msgs.msg import Sensor
 from rcl_interfaces.srv import GetParameters
 from rcl_interfaces.msg import ParameterValue
 
-
-from agimus_controller.factory.robot_model import (
-    RobotModelParameters,
-    RobotModels,
-)
 from agimus_controller.trajectories.sine_wave_params import SinWaveParams
+from agimus_controller.factory.robot_model import RobotModelParameters, RobotModels
 from agimus_controller.trajectories.sine_wave_configuration_space import (
     SinusWaveConfigurationSpace,
 )
@@ -57,7 +53,6 @@ class SimpleTrajectoryPublisher(Node):
 
     def __init__(self):
         super().__init__("simple_trajectory_publisher")
-
         self.param_listener = trajectory_weights_params.ParamListener(self)
         self.params = self.param_listener.get_params()
         self.ee_frame_name = self.params.ee_frame_name
@@ -201,9 +196,7 @@ class SimpleTrajectoryPublisher(Node):
             ), "sine_wave_period and moving_joint_names must have the same length"
             assert len(self.sine_wave_parameters.scale_duration) == len(
                 self.moving_joint_names
-            ), (
-                "sine_wave_scale_duration and moving_joint_names must have the same length"
-            )
+            ), "sine_wave_scale_duration and moving_joint_names must have the same length"
             return SinusWaveConfigurationSpace(
                 sine_wave_params=self.sine_wave_parameters,
                 ee_frame_name=self.ee_frame_name,
@@ -216,15 +209,15 @@ class SimpleTrajectoryPublisher(Node):
                 w_pose=self.get_weights(self.params.w_pose, 6),
             )
         elif trajectory_name == "sine_wave_cartesian_space":
-            assert len(self.sine_wave_parameters.amplitude) == 3, (
-                "sine_wave_amplitude length must be 3"
-            )
-            assert len(self.sine_wave_parameters.period) == 3, (
-                "sine_wave_period length must be 3"
-            )
-            assert len(self.sine_wave_parameters.scale_duration) == 3, (
-                "sine_wave_scale_duration length must be 3"
-            )
+            assert (
+                len(self.sine_wave_parameters.amplitude) == 3
+            ), "sine_wave_amplitude length must be 3"
+            assert (
+                len(self.sine_wave_parameters.period) == 3
+            ), "sine_wave_period length must be 3"
+            assert (
+                len(self.sine_wave_parameters.scale_duration) == 3
+            ), "sine_wave_scale_duration length must be 3"
             return SinusWaveCartesianSpace(
                 sine_wave_params=self.sine_wave_parameters,
                 ee_frame_name=self.ee_frame_name,
