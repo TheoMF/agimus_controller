@@ -274,7 +274,7 @@ class AgimusController(Node, RobotModelsMixin):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
     def update_transforms(self):
-        now = self.get_clock().now()
+        now = rclpy.time.Time()
         transforms = self.ocp.input_transforms
         for key in transforms:
             parent_frame, child_frame = key
